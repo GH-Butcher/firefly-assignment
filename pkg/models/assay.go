@@ -1,6 +1,6 @@
 package models
 
 type Assay struct {
-	Name     string
-	TopWords []string
+	Name     string   `json:"name"`
+	TopWords []string `json:"top_words"`
 }
