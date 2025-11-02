@@ -16,6 +16,10 @@ func Init(opts ...Option) *Logger {
 		Log: slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})),
 	}
 
+	for _, opt := range opts {
+		opt(l)
+	}
+
 	return l
 }
 

@@ -1,0 +1,20 @@
+version: '3'
+
+silent: true
+
+vars:
+  CURRENT_DIR:
+    sh: pwd
+
+
+tasks:
+  install:
+    dir: '{{.CURRENT_DIR}}'
+    cmds:
+      - go mod tidy
+      - go mod vendor
+
+  run_app:
+    dir: '{{.CURRENT_DIR}}/cmd/assay-handler'
+    cmds:
+      - go run main.go
