@@ -13,6 +13,8 @@ import (
 
 func main() {
 	bankConfig := words_bank.NewConfig()
+	assayConfig := assays.NewConfig(assays.WithMax(100))
+
 	log := logger.Init(logger.WithLevel(slog.LevelInfo)).Log
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
@@ -29,13 +31,12 @@ func main() {
 	log.Info("Bank of Words Loaded", "words", len(bank))
 
 	//--> Start Service
-	assayCfg := assays.NewConfig(assays.WithMax(100))
 	// Run processing in a goroutine so we can react to signals
 	resultCh := make(chan assays.Result, 1)
 	errCh := make(chan error, 1)
 
 	go func() {
-		res, e := assays.ProcessTopWords(ctx, log, assayCfg, bank)
+		res, e := assays.ProcessTopWords(ctx, log, assayConfig, bank)
 		if e != nil {
 			errCh <- e
 			return
