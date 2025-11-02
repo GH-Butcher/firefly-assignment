@@ -8,12 +8,14 @@ type Config struct {
 	Buffer        int
 	ListPath      string
 	Max           int
+	StripHTML     bool
 }
 
 func NewConfig(opts ...Option) *Config {
 	c := &Config{
-		MinWordLength: 3,
+		MinWordLength: 4,
 		Max:           100,
+		StripHTML:     true,
 	}
 
 	for _, opt := range opts {
@@ -50,5 +52,17 @@ func WithRatePerSecond(ratePerSecond int) Option {
 func WithBuffer(buffer int) Option {
 	return func(c *Config) {
 		c.Buffer = buffer
+	}
+}
+
+func WithListPath(listPath string) Option {
+	return func(c *Config) {
+		c.ListPath = listPath
+	}
+}
+
+func WithStripHTML(stripHTML bool) Option {
+	return func(c *Config) {
+		c.StripHTML = stripHTML
 	}
 }

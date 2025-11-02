@@ -10,8 +10,7 @@ type Config struct {
 	URL            string
 	DefaultTimeout time.Duration
 	Client         *http.Client
-
-	MinWordLength int
+	MinWordLength  int
 }
 
 func NewConfig(opts ...Option) *Config {
@@ -28,7 +27,6 @@ func NewConfig(opts ...Option) *Config {
 		opt(c)
 	}
 
-	// Ensure client timeout aligns with DefaultTimeout unless the client was overridden after timeout was set.
 	if c.Client != nil && c.Client.Timeout == 0 && c.DefaultTimeout > 0 {
 		c.Client.Timeout = c.DefaultTimeout
 	}
@@ -53,5 +51,11 @@ func WithHTTPClient(client *http.Client) Option {
 		if c.Client != nil && c.Client.Timeout == 0 && c.DefaultTimeout > 0 {
 			c.Client.Timeout = c.DefaultTimeout
 		}
+	}
+}
+
+func WithMinWordLength(minWordLength int) Option {
+	return func(c *Config) {
+		c.MinWordLength = minWordLength
 	}
 }

@@ -123,6 +123,11 @@ func (s *Service) ProcessTopWords(ctx context.Context) (Result, error) {
 					continue
 				}
 
+				// Optional HTML stripping to avoid counting DOM/JS/CSS tokens
+				if s.cfg.StripHTML && isHTML(text) {
+					text = extractVisibleTextHTML(text)
+				}
+
 				// Per-assay count
 				counts := make(map[string]int, 1024)
 				countWordsIntoMap(text, s.bank, minLen, counts)
@@ -244,6 +249,54 @@ func topN(m map[string]int, n int) []WordCount {
 		arr = arr[:n]
 	}
 	return arr
+}
+
+// HTML detection and stripping helpers
+
+var (
+	reHTMLComment   = regexp.MustCompile(`(?s)<!--.*?-->`)
+	reScriptBlock   = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`)     // remove scripts
+	reStyleBlock    = regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`)       // remove styles
+	reNoScriptBlock = regexp.MustCompile(`(?is)<noscript[^>]*>.*?</noscript>`) // remove noscript
+	reTags          = regexp.MustCompile(`(?s)<[^>]+>`)                        // any remaining tags
+	reMultiSpace    = regexp.MustCompile(`\s+`)
+)
+
+var htmlEntityReplacer = strings.NewReplacer(
+	"&nbsp;", " ",
+	"&amp;", "&",
+	"&lt;", "<",
+	"&gt;", ">",
+	"&quot;", "\"",
+	"&apos;", "'",
+)
+
+func isHTML(s string) bool {
+	// Cheap checks: common HTML markers or high tag density
+	ls := strings.ToLower(s)
+	if strings.Contains(ls, "<html") || strings.Contains(ls, "<!doctype html") || strings.Contains(ls, "<head") || strings.Contains(ls, "<body") {
+		return true
+	}
+	// Heuristic: if there are many angle brackets with tag-like patterns
+	if strings.Contains(ls, "<div") || strings.Contains(ls, "<script") || strings.Contains(ls, "<style") || strings.Contains(ls, "<span") || strings.Contains(ls, "<p>") {
+		return true
+	}
+	return false
+}
+
+func extractVisibleTextHTML(s string) string {
+	// Remove comments and non-visible blocks first
+	s = reHTMLComment.ReplaceAllString(s, " ")
+	s = reScriptBlock.ReplaceAllString(s, " ")
+	s = reStyleBlock.ReplaceAllString(s, " ")
+	s = reNoScriptBlock.ReplaceAllString(s, " ")
+	// Strip all remaining tags
+	s = reTags.ReplaceAllString(s, " ")
+	// Decode a few common HTML entities
+	s = htmlEntityReplacer.Replace(s)
+	// Collapse whitespace
+	s = reMultiSpace.ReplaceAllString(s, " ")
+	return strings.TrimSpace(s)
 }
 
 // IO and list helpers
