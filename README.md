@@ -30,11 +30,16 @@ Example output (shape may vary):
 
 ```json
 {
-  "top": [
-    { "word": "example", "count": 42 },
-    { "word": "data", "count": 37 }
-  ],
-  "total_distinct": 1234
+  "assays_result": {
+    "assays_count": 500,
+    "desired_top_words_count": 1,
+    "top_words": [
+      {
+        "word": "someword",
+        "count": 8251
+      }
+    ]
+  }
 }
 ```
 
@@ -48,10 +53,8 @@ firefly-assignment/
 │       └── main.go
 ├── pkg/
 │   ├── assays/
-│   ├── http/
 │   ├── logger/
-│   ├── models/
 │   ├── utils/
-│   └── words_bank/
+│   └── wordsbank/
 └── vendor/
 ```
