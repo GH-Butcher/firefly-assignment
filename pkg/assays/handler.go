@@ -1,105 +1,62 @@
 package assays
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"errors"
-	"io"
-	"log/slog"
-	"net/http"
-	"os"
-	"regexp"
-	"runtime"
+	"firefly-assignment/pkg/utils"
+	"fmt"
 	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"firefly-assignment/pkg/models"
+	"net/http"
+	"strings"
+
+	"golang.org/x/net/html"
 )
 
-func ProcessTopWords(ctx context.Context, log *slog.Logger, cfg *Config, bank map[string]struct{}) (Result, error) {
-	svc := NewService(log, cfg, bank)
-	return svc.ProcessTopWords(ctx)
+const readLimit = 5 << 20
+
+type job struct {
+	url string
 }
 
-// ProcessTopWords now computes top 10 for EACH assay separately and returns []models.Assay.
-func (s *Service) ProcessTopWords(ctx context.Context) (Result, error) {
-	// Resolve list path
-	listPath := s.cfg.ListPath
-	if listPath == "" {
-		listPath = "assays.list"
-	}
+type result struct {
+	err error
+}
 
-	// Load assay identifiers (names/paths/URLs)
-	ids, err := s.loadEssayList(listPath)
+func (s *Service) HandleAssays(ctx context.Context) (Result, error) {
+	s.log.Info("Handling assays")
+	//--> load urls from file
+	urls, err := utils.LoadUrlsList(s.config.UrlsListPath, s.log)
 	if err != nil {
 		return Result{}, err
 	}
-
-	// Apply max cap only
-	if s.cfg.Max > 0 && s.cfg.Max < len(ids) {
-		ids = ids[:s.cfg.Max]
+	//apply filters
+	if s.config.MaxUrlsToFetch > 0 && s.config.MaxUrlsToFetch < len(urls) {
+		urls = urls[:s.config.MaxUrlsToFetch]
 	}
-	if len(ids) == 0 {
-		return Result{Assays: []models.Assay{}}, nil
-	}
-
-	// Concurrency config
-	workers := s.cfg.Workers
-	if workers <= 0 {
-		workers = runtime.NumCPU()
-	}
-	buffer := s.cfg.Buffer
-	if buffer <= 0 {
-		buffer = 128
-	}
-	rps := s.cfg.RatePerSecond
-	if rps <= 0 {
-		rps = 20
-	}
-	minLen := s.cfg.MinWordLength
-	if minLen < 1 {
-		minLen = 1
+	if len(urls) == 0 {
+		return Result{}, nil
 	}
 
-	type job struct {
-		name string
-		id   string
-	}
-	type result struct {
-		assay models.Assay
-		err   error
-	}
+	jobs := make(chan job, s.config.Buffer)
+	results := make(chan result, s.config.Buffer)
 
-	jobs := make(chan job, buffer)
-	results := make(chan result, buffer)
-
-	// Rate limiter (token bucket at RPS)
-	tokenCh := make(chan struct{}, rps)
-	go func() {
-		ticker := time.NewTicker(time.Second / time.Duration(rps))
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				select {
-				case tokenCh <- struct{}{}:
-				default:
-				}
-			}
-		}
-	}()
-
-	// Progress counter
+	//--> Progress Counter
 	var handled atomic.Int64
+	//--> Global words count
+	wordsCount := make(map[string]int, 2048)
+	var wordsMu sync.Mutex
 
-	// Workers: fetch, count per-assay, emit top 10 for that assay
+	//--> Rate limiter (Token bucket at RPS)
+	tokenChan := rateLimiter(ctx, s.config.RatePerSecond)
+
+	//--> Workers: fetch, count, emit top 10 for all assays
 	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
+	for i := 0; i < s.config.Workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -107,203 +64,109 @@ func (s *Service) ProcessTopWords(ctx context.Context) (Result, error) {
 				select {
 				case <-ctx.Done():
 					return
-				case <-tokenCh:
+				case <-tokenChan:
 				}
 
-				text, e := s.fetchEssay(ctx, j.id)
-				if e != nil {
+				text, intErr := s.fetchAssay(ctx, j.url)
+				if intErr != nil {
 					select {
-					case results <- result{err: e}:
+					case results <- result{err: intErr}:
 					default:
 					}
 					n := handled.Add(1)
 					if n%50 == 0 {
-						s.log.Info("Progress", "handled", n, "total", len(ids))
+						s.log.Info(fmt.Sprintf("Handled %d assays", n))
 					}
 					continue
 				}
-
-				// Optional HTML stripping to avoid counting DOM/JS/CSS tokens
-				if s.cfg.StripHTML && isHTML(text) {
-					text = extractVisibleTextHTML(text)
-				}
-
-				// Per-assay count
-				counts := make(map[string]int, 1024)
-				countWordsIntoMap(text, s.bank, minLen, counts)
-
-				// Top 10 words (strings only)
-				top := topN(counts, 10)
-				words := make([]string, 0, len(top))
-				for _, wc := range top {
-					words = append(words, wc.Word)
-				}
-
-				assay := models.Assay{
-					Name:     j.name,
-					TopWords: words,
-				}
-				results <- result{assay: assay}
-
+				//--> get words from assay and append to global map
+				wordsMu.Lock()
+				utils.CountWordsIntoMap(text, s.wordsBank, s.config.MinWordLength, wordsCount)
+				wordsMu.Unlock()
 				n := handled.Add(1)
 				if n%50 == 0 {
-					s.log.Info("Progress", "handled", n, "total", len(ids))
+					s.log.Info(fmt.Sprintf("Handled %d assays", n))
 				}
 			}
 		}()
 	}
 
-	// Producer: build jobs with name and id.
-	// Use the line itself as both name and id; adjust if your list has "name,uri" format.
+	//--> Feed jobs and then close
 	go func() {
-		defer close(jobs)
-		for _, id := range ids {
-			name := id
-			jobs <- job{name: name, id: id}
+		for _, u := range urls {
+			select {
+			case <-ctx.Done():
+				return
+			case jobs <- job{url: u}:
+			}
 		}
+		defer close(jobs)
 	}()
 
-	// Collector
+	//--> Collector
 	go func() {
 		wg.Wait()
-		close(results)
+		defer close(results)
 	}()
 
-	var assaysOut []models.Assay
-	var firstErr error
+	var firstError error
 	for r := range results {
-		if r.err != nil && firstErr == nil {
-			firstErr = r.err
-			// keep going to collect others
+		if r.err != nil && firstError == nil {
+			firstError = r.err
+			//keep going to collect others
 			continue
-		}
-		if r.assay.Name != "" {
-			assaysOut = append(assaysOut, r.assay)
 		}
 	}
 
-	// Final progress if not on an exact multiple
+	//--> final progress counter
 	if handled.Load()%50 != 0 {
-		s.log.Info("Progress", "handled", handled.Load(), "total", len(ids))
+		s.log.Info("Progress", "handled", handled.Load(), "total", len(urls))
 	}
 
-	// If nothing succeeded, return the first error
-	if len(assaysOut) == 0 && firstErr != nil {
-		return Result{}, firstErr
+	//--> If nothing succeeded, return error
+	if firstError != nil && len(wordsCount) == 0 {
+		return Result{}, firstError
 	}
 
-	return Result{Assays: assaysOut}, nil
+	//---> Get Top Words
+	topWords := topWordsCounter(wordsCount, s.config.TopWordsCount)
+
+	assayResult := AssayResult{
+		AssaysCount:          len(urls),
+		DesiredTopWordsCount: s.config.TopWordsCount,
+		TopWords:             topWords,
+	}
+
+	return Result{AssaysResult: assayResult}, nil
+
 }
 
-// countWordsIntoMap counts valid words into a provided map (per-assay).
-var alphaOnly = regexp.MustCompile(`^[a-zA-Z]+$`)
+func rateLimiter(ctx context.Context, ratePerSecond int) chan struct{} {
+	tokenChan := make(chan struct{}, ratePerSecond)
 
-func countWordsIntoMap(text string, bank map[string]struct{}, minLen int, dst map[string]int) {
-	parts := splitWords(text)
-	for _, p := range parts {
-		if len(p) < minLen {
-			continue
+	go func() {
+		ticker := time.NewTicker(time.Second / time.Duration(ratePerSecond))
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				select {
+				case tokenChan <- struct{}{}:
+				default:
+				}
+			}
 		}
-		w := strings.ToLower(p)
-		if !alphaOnly.MatchString(w) {
-			continue
-		}
-		if _, ok := bank[w]; !ok {
-			continue
-		}
-		dst[w]++
-	}
+	}()
+
+	return tokenChan
 }
 
-// Helpers reused from previous version
-
-func splitWords(s string) []string {
-	var b strings.Builder
-	b.Grow(len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') {
-			b.WriteByte(c)
-		} else {
-			b.WriteByte(' ')
-		}
-	}
-	return strings.Fields(b.String())
-}
-
-func topN(m map[string]int, n int) []WordCount {
-	if n <= 0 {
-		return []WordCount{}
-	}
-	arr := make([]WordCount, 0, len(m))
-	for w, c := range m {
-		arr = append(arr, WordCount{Word: w, Count: c})
-	}
-	sort.Slice(arr, func(i, j int) bool {
-		if arr[i].Count == arr[j].Count {
-			return arr[i].Word < arr[j].Word
-		}
-		return arr[i].Count > arr[j].Count
-	})
-	if len(arr) > n {
-		arr = arr[:n]
-	}
-	return arr
-}
-
-// HTML detection and stripping helpers
-
-var (
-	reHTMLComment   = regexp.MustCompile(`(?s)<!--.*?-->`)
-	reScriptBlock   = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`)     // remove scripts
-	reStyleBlock    = regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`)       // remove styles
-	reNoScriptBlock = regexp.MustCompile(`(?is)<noscript[^>]*>.*?</noscript>`) // remove noscript
-	reTags          = regexp.MustCompile(`(?s)<[^>]+>`)                        // any remaining tags
-	reMultiSpace    = regexp.MustCompile(`\s+`)
-)
-
-var htmlEntityReplacer = strings.NewReplacer(
-	"&nbsp;", " ",
-	"&amp;", "&",
-	"&lt;", "<",
-	"&gt;", ">",
-	"&quot;", "\"",
-	"&apos;", "'",
-)
-
-func isHTML(s string) bool {
-	// Cheap checks: common HTML markers or high tag density
-	ls := strings.ToLower(s)
-	if strings.Contains(ls, "<html") || strings.Contains(ls, "<!doctype html") || strings.Contains(ls, "<head") || strings.Contains(ls, "<body") {
-		return true
-	}
-	// Heuristic: if there are many angle brackets with tag-like patterns
-	if strings.Contains(ls, "<div") || strings.Contains(ls, "<script") || strings.Contains(ls, "<style") || strings.Contains(ls, "<span") || strings.Contains(ls, "<p>") {
-		return true
-	}
-	return false
-}
-
-func extractVisibleTextHTML(s string) string {
-	// Remove comments and non-visible blocks first
-	s = reHTMLComment.ReplaceAllString(s, " ")
-	s = reScriptBlock.ReplaceAllString(s, " ")
-	s = reStyleBlock.ReplaceAllString(s, " ")
-	s = reNoScriptBlock.ReplaceAllString(s, " ")
-	// Strip all remaining tags
-	s = reTags.ReplaceAllString(s, " ")
-	// Decode a few common HTML entities
-	s = htmlEntityReplacer.Replace(s)
-	// Collapse whitespace
-	s = reMultiSpace.ReplaceAllString(s, " ")
-	return strings.TrimSpace(s)
-}
-
-// IO and list helpers
-
-func (s *Service) fetchEssay(ctx context.Context, id string) (string, error) {
-	if strings.HasPrefix(id, "http://") || strings.HasPrefix(id, "https://") {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, id, nil)
+// fetchAssay fetches the assay from the given url, parses it and returns the text
+func (s *Service) fetchAssay(ctx context.Context, url string) (string, error) {
+	if strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			return "", err
 		}
@@ -311,59 +174,78 @@ func (s *Service) fetchEssay(ctx context.Context, id string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		defer resp.Body.Close()
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return "", errors.New("non-2xx response")
+		defer func() {
+			if err = resp.Body.Close(); err != nil {
+				s.log.Error(err.Error())
+			}
+		}()
+
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			if resp.StatusCode == http.StatusNotFound {
+				return "", nil
+			}
+			return "", errors.New(fmt.Sprintf("bad status code: %d, assay url %s", resp.StatusCode, url))
 		}
-		b, err := ioReadAllLimit(resp.Body, 5<<20) // 5MB cap
+		//--> read response body with limit
+		body, err := utils.IOReadAllWithLimit(resp.Body, readLimit) //--> readLimit is 5MB
 		if err != nil {
 			return "", err
 		}
-		return string(b), nil
-	}
-	b, err := os.ReadFile(id)
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
-}
-
-func ioReadAllLimit(r io.Reader, limit int64) ([]byte, error) {
-	var total int64
-	buf := make([]byte, 0, 64*1024)
-	tmp := make([]byte, 64*1024)
-	for {
-		n, err := r.Read(tmp)
-		if n > 0 {
-			total += int64(n)
-			if total > limit {
-				return nil, errors.New("response too large")
-			}
-			buf = append(buf, tmp[:n]...)
-		}
+		//--> parse html, extract text
+		assayHtml, err := html.Parse(bytes.NewReader(body))
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return buf, nil
-			}
-			return nil, err
+			return "", err
 		}
+
+		var sb strings.Builder
+		//--> recursive function to walk nodes
+		var walk func(*html.Node, bool)
+
+		walk = func(n *html.Node, skip bool) {
+			if n.Type == html.ElementNode {
+				// tags to skip entirely (and their children)
+				switch n.Data {
+				case "script", "style", "noscript", "iframe", "header", "footer", "nav", "aside":
+					skip = true
+				}
+			}
+			if !skip {
+				if n.Type == html.TextNode {
+					text := strings.TrimSpace(n.Data)
+					if len(text) > 0 {
+						sb.WriteString(text)
+						sb.WriteString(" ")
+					}
+				}
+				for c := n.FirstChild; c != nil; c = c.NextSibling {
+					walk(c, skip)
+				}
+			}
+		}
+		walk(assayHtml, false)
+
+		return sb.String(), nil
 	}
+	s.log.Error(fmt.Sprintf("invalid url: %s", url))
+	return "", nil
 }
 
-func (s *Service) loadEssayList(path string) ([]string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
+func topWordsCounter(words map[string]int, desiredTopN int) []WordCount {
+	if desiredTopN <= 0 {
+		return []WordCount{}
 	}
-	defer f.Close()
-	var ids []string
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		t := strings.TrimSpace(sc.Text())
-		if t == "" || strings.HasPrefix(t, "#") {
-			continue
+	topWords := make([]WordCount, 0, len(words))
+	for k, v := range words {
+		topWords = append(topWords, WordCount{Word: k, Count: v})
+	}
+	sort.Slice(topWords, func(i, j int) bool {
+		if topWords[i].Count == topWords[j].Count {
+			return topWords[i].Word < topWords[j].Word
 		}
-		ids = append(ids, t)
+		return topWords[i].Count > topWords[j].Count
+	})
+	if len(topWords) > desiredTopN {
+		return topWords[:desiredTopN]
 	}
-	return ids, sc.Err()
+	return topWords
 }

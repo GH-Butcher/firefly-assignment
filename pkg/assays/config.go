@@ -1,68 +1,73 @@
 package assays
 
+import "runtime"
+
 type Option func(*Config)
+
 type Config struct {
-	MinWordLength int
-	Workers       int
-	RatePerSecond int
-	Buffer        int
-	ListPath      string
-	Max           int
-	StripHTML     bool
+	MinWordLength  int
+	MaxUrlsToFetch int
+	UrlsListPath   string
+	Workers        int
+	Buffer         int
+	RatePerSecond  int
+	TopWordsCount  int
 }
 
 func NewConfig(opts ...Option) *Config {
-	c := &Config{
-		MinWordLength: 4,
-		Max:           100,
-		StripHTML:     true,
+	cfg := &Config{
+		MinWordLength:  3,
+		MaxUrlsToFetch: 0,
+		Workers:        runtime.NumCPU(),
+		Buffer:         128,
+		RatePerSecond:  30,
+		TopWordsCount:  10,
 	}
 
 	for _, opt := range opts {
-		opt(c)
+		opt(cfg)
 	}
-
-	return c
+	return cfg
 }
 
 func WithMinWordLength(minWordLength int) Option {
-	return func(c *Config) {
-		c.MinWordLength = minWordLength
+	return func(cfg *Config) {
+		cfg.MinWordLength = minWordLength
 	}
 }
 
-func WithMax(max int) Option {
-	return func(c *Config) {
-		c.Max = max
+func WithMaxUrlsToFetch(maxUrlsToFetch int) Option {
+	return func(cfg *Config) {
+		cfg.MaxUrlsToFetch = maxUrlsToFetch
+	}
+}
+
+func WithUrlsListPath(urlsListPath string) Option {
+	return func(cfg *Config) {
+		cfg.UrlsListPath = urlsListPath
 	}
 }
 
 func WithWorkers(workers int) Option {
-	return func(c *Config) {
-		c.Workers = workers
-	}
-}
-
-func WithRatePerSecond(ratePerSecond int) Option {
-	return func(c *Config) {
-		c.RatePerSecond = ratePerSecond
+	return func(cfg *Config) {
+		cfg.Workers = workers
 	}
 }
 
 func WithBuffer(buffer int) Option {
-	return func(c *Config) {
-		c.Buffer = buffer
+	return func(cfg *Config) {
+		cfg.Buffer = buffer
 	}
 }
 
-func WithListPath(listPath string) Option {
-	return func(c *Config) {
-		c.ListPath = listPath
+func WithRatePerSecond(ratePerSecond int) Option {
+	return func(cfg *Config) {
+		cfg.RatePerSecond = ratePerSecond
 	}
 }
 
-func WithStripHTML(stripHTML bool) Option {
-	return func(c *Config) {
-		c.StripHTML = stripHTML
+func WithTopWordsCount(topWordsCount int) Option {
+	return func(cfg *Config) {
+		cfg.TopWordsCount = topWordsCount
 	}
 }

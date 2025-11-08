@@ -5,67 +5,84 @@ import (
 	"encoding/json"
 	"firefly-assignment/pkg/assays"
 	"firefly-assignment/pkg/logger"
-	"firefly-assignment/pkg/words_bank"
+	"firefly-assignment/pkg/wordsbank"
 	"log/slog"
+	"net/http"
 	"os"
-	"os/signal"
+	"time"
 )
 
+const urlsListPath = "assays.list"
+
 func main() {
-	bankConfig := words_bank.NewConfig()
-	assayConfig := assays.NewConfig(assays.WithMax(100))
-
-	log := logger.Init(logger.WithLevel(slog.LevelInfo)).Log
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	log.Info("Loading Bank of Words")
+	log := logger.Init(logger.WithLogLevel(slog.LevelDebug)).Log
 
-	bank, err := words_bank.LoadWordBank(ctx, bankConfig)
-	if err != nil {
-		log.Error("Failed to load bank of words", "error", err)
-		return
+	httpClient := &http.Client{
+		Timeout: 10 * time.Second,
 	}
 
-	log.Info("Bank of Words Loaded", "words", len(bank))
+	bankCfg := wordsbank.NewConfig(
+		wordsbank.WithLog(log),
+		wordsbank.WithMinWordLength(3),
+		wordsbank.WithUrl("https://raw.githubusercontent.com/dwyl/english-words/master/words.txt"),
+		wordsbank.WithHttpClient(httpClient),
+	)
+	wbank, err := bankCfg.LoadBankOfWords(ctx)
+	if err != nil {
+		log.Error("Bank of words loading error: ", err, "")
+		return
+	}
+	log.Info("Bank of words loaded", "words count", len(wbank))
 
-	//--> Start Service
-	// Run processing in a goroutine so we can react to signals
-	resultCh := make(chan assays.Result, 1)
-	errCh := make(chan error, 1)
+	//---> assays service config
+	srvConfig := assays.NewConfig(
+		assays.WithBuffer(128),
+		assays.WithMinWordLength(3),
+		assays.WithMaxUrlsToFetch(500),
+		assays.WithRatePerSecond(10),
+		assays.WithWorkers(10),
+		assays.WithUrlsListPath(urlsListPath),
+		assays.WithTopWordsCount(10),
+	)
+	//---> assays service
+	assayHandler := assays.NewService(log, srvConfig, wbank, httpClient)
+
+	resultsChan := make(chan assays.Result, 1)
+	errorsChan := make(chan error, 1)
 
 	go func() {
-		res, e := assays.ProcessTopWords(ctx, log, assayConfig, bank)
-		if e != nil {
-			errCh <- e
+		res, aErr := assayHandler.HandleAssays(ctx)
+		if aErr != nil {
+			errorsChan <- aErr
 			return
 		}
-		resultCh <- res
+		resultsChan <- res
 	}()
 
 	select {
 	case <-ctx.Done():
-		// Signal received, cancel propagated; workers will stop gracefully.
-		log.Info("Shutdown requested, waiting for workers to finish...")
-		// A second select to wait briefly for a final result if it arrives quickly.
+		log.Error("Context cancelled")
 		select {
-		case res := <-resultCh:
-			out, _ := json.MarshalIndent(res, "", "  ")
-			os.Stdout.Write(out)
+		case res := <-resultsChan:
+			jsonOutput, _ := json.MarshalIndent(res, "", "  ")
+			os.Stdout.Write(jsonOutput)
 			os.Stdout.Write([]byte("\n"))
 			log.Info("Shutdown complete with partial/final results")
-		case <-errCh:
-			log.Info("Shutdown complete with errors")
+		case err = <-errorsChan:
+			log.Error("Error received", "error", err)
 		default:
 		}
-	case err = <-errCh:
-		log.Error("Failed processing essays", "error", err)
-		os.Exit(1)
-	case res := <-resultCh:
-		out, _ := json.MarshalIndent(res, "", "  ")
-		os.Stdout.Write(out)
+	case err = <-errorsChan:
+		log.Error("Error received", "error", err)
+		return
+	case res := <-resultsChan:
+		jsonOutput, _ := json.MarshalIndent(res, "", "  ")
+		os.Stdout.Write(jsonOutput)
 		os.Stdout.Write([]byte("\n"))
-		log.Info("Processing completed")
+		log.Info("Proccessing complete..")
 	}
+
 }

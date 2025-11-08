@@ -5,26 +5,24 @@ import (
 	"os"
 )
 
-type Logger struct {
+type Option func(*Config)
+
+type Config struct {
 	Log *slog.Logger
 }
 
-type Option func(*Logger)
-
-func Init(opts ...Option) *Logger {
-	l := &Logger{
-		Log: slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})),
+func Init(opts ...Option) *Config {
+	cfg := &Config{
+		slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})),
 	}
-
 	for _, opt := range opts {
-		opt(l)
+		opt(cfg)
 	}
-
-	return l
+	return cfg
 }
 
-func WithLevel(level slog.Level) Option {
-	return func(l *Logger) {
-		l.Log = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
+func WithLogLevel(level slog.Level) Option {
+	return func(cfg *Config) {
+		cfg.Log = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 	}
 }
