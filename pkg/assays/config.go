@@ -1,6 +1,13 @@
 package assays
 
-import "runtime"
+const (
+	minWordLength  = 3
+	maxUrlsToFetch = 0
+	workers        = 10
+	buffer         = 128
+	ratePerSecond  = 30
+	topWordsCount  = 10
+)
 
 type Option func(*Config)
 
@@ -16,12 +23,12 @@ type Config struct {
 
 func NewConfig(opts ...Option) *Config {
 	cfg := &Config{
-		MinWordLength:  3,
-		MaxUrlsToFetch: 0,
-		Workers:        runtime.NumCPU(),
-		Buffer:         128,
-		RatePerSecond:  30,
-		TopWordsCount:  10,
+		MinWordLength:  minWordLength,
+		MaxUrlsToFetch: maxUrlsToFetch,
+		Workers:        workers,
+		Buffer:         buffer,
+		RatePerSecond:  ratePerSecond,
+		TopWordsCount:  topWordsCount,
 	}
 
 	for _, opt := range opts {

@@ -7,17 +7,23 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"regexp"
 
 	"strings"
 )
 
 // ---> Bank of Words filtering settings
-var lettersOnly = regexp.MustCompile("[^a-zA-Z]+")
-
 func IsValidWord(word string, minLength int) bool {
 	// valid if meets min length and contains ONLY letters (no digits/punct)
-	return len(word) >= minLength && !lettersOnly.MatchString(word)
+	if len(word) < minLength {
+		return false
+	}
+	for i := 0; i < len(word); i++ {
+		c := word[i]
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+			return false
+		}
+	}
+	return true
 }
 
 func LoadUrlsList(path string, log *slog.Logger) ([]string, error) {
@@ -69,7 +75,6 @@ func IOReadAllWithLimit(r io.Reader, limit int64) ([]byte, error) {
 
 func SplitTextToWords(text string) []string {
 	var b strings.Builder
-	b.Grow(len(text))
 	for i := 0; i < len(text); i++ {
 		c := text[i]
 		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') {

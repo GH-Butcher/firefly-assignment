@@ -9,28 +9,37 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"time"
 )
 
 const (
-	urlsListPath   = "assays.list"
-	contextTimeout = 5 * time.Minute
+	urlsListPath         = "assays.list"
+	wordsBankUrl         = "https://raw.githubusercontent.com/dwyl/english-words/master/words.txt"
+	contextTimeout       = 5 * time.Minute
+	minWordLength        = 3
+	maxUrlsToFetch       = 100
+	bufferSize           = 128
+	ratePerSecond        = 30
+	workers              = 10
+	desiredTopWordsCount = 10
+	defaultTimeout       = 10 * time.Second
 )
 
 func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), contextTimeout)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
 	defer cancel()
 
 	log := logger.Init(logger.WithLogLevel(slog.LevelDebug)).Log
 
 	httpClient := &http.Client{
-		Timeout: 10 * time.Second,
+		Timeout: defaultTimeout,
 	}
 
 	bankCfg := wordsbank.NewConfig(
 		wordsbank.WithLog(log),
-		wordsbank.WithMinWordLength(3),
-		wordsbank.WithUrl("https://raw.githubusercontent.com/dwyl/english-words/master/words.txt"),
+		wordsbank.WithMinWordLength(minWordLength),
+		wordsbank.WithUrl(wordsBankUrl),
 		wordsbank.WithHttpClient(httpClient),
 	)
 	wbank, err := bankCfg.LoadBankOfWords(ctx)
@@ -42,13 +51,13 @@ func main() {
 
 	//---> assays service config
 	srvConfig := assays.NewConfig(
-		assays.WithBuffer(128),
-		assays.WithMinWordLength(3),
-		assays.WithMaxUrlsToFetch(500),
-		assays.WithRatePerSecond(10),
-		assays.WithWorkers(10),
+		assays.WithBuffer(bufferSize),
+		assays.WithMinWordLength(minWordLength),
+		assays.WithMaxUrlsToFetch(maxUrlsToFetch),
+		assays.WithRatePerSecond(ratePerSecond),
+		assays.WithWorkers(workers),
 		assays.WithUrlsListPath(urlsListPath),
-		assays.WithTopWordsCount(10),
+		assays.WithTopWordsCount(desiredTopWordsCount),
 	)
 	//---> assays service
 	assayHandler := assays.NewService(log, srvConfig, wbank, httpClient)
@@ -70,15 +79,7 @@ func main() {
 		log.Error("Context cancelled")
 		select {
 		case res := <-resultsChan:
-			jsonOutput, _ := json.MarshalIndent(res, "", "  ")
-			_, err = os.Stdout.Write(jsonOutput)
-			if err != nil {
-				return
-			}
-			_, err = os.Stdout.Write([]byte("\n"))
-			if err != nil {
-				return
-			}
+			jsonOutputHelper(res, log)
 			log.Info("Shutdown complete with partial/final results")
 		case err = <-errorsChan:
 			log.Error("Error received", "error", err)
@@ -89,15 +90,21 @@ func main() {
 		log.Error("Error received", "error", err)
 		return
 	case res := <-resultsChan:
-		jsonOutput, _ := json.MarshalIndent(res, "", "  ")
-		_, err = os.Stdout.Write(jsonOutput)
-		if err != nil {
-			return
-		}
-		_, err = os.Stdout.Write([]byte("\n"))
-		if err != nil {
-			return
-		}
+		jsonOutputHelper(res, log)
 		log.Info("Processing complete..")
+	}
+}
+
+func jsonOutputHelper(res assays.Result, log *slog.Logger) {
+	jo, _ := json.MarshalIndent(res, "", "  ")
+	_, err := os.Stdout.Write(jo)
+	if err != nil {
+		log.Error("Error writing to stdout", "error", err)
+		return
+	}
+	_, err = os.Stdout.Write([]byte("\n"))
+	if err != nil {
+		log.Error("Error writing to stdout", "error", err)
+		return
 	}
 }

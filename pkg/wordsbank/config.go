@@ -4,6 +4,13 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
+)
+
+const (
+	minWordLength  = 3
+	url            = "http://localhost:8080"
+	defaultTimeout = 10 * time.Second
 )
 
 type Option func(*Config)
@@ -18,10 +25,15 @@ type Config struct {
 func NewConfig(opts ...Option) *Config {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	cfg := &Config{
-		Url:           "http://localhost:8080",
-		HttpClient:    &http.Client{},
+		Url:           url,
 		Log:           log,
-		MinWordLength: 3,
+		MinWordLength: minWordLength,
+	}
+
+	if cfg.HttpClient == nil {
+		cfg.HttpClient = &http.Client{
+			Timeout: defaultTimeout,
+		}
 	}
 
 	for _, opt := range opts {

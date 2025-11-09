@@ -3,9 +3,9 @@ package assays
 import (
 	"bytes"
 	"context"
-	"errors"
 	"firefly-assignment/pkg/utils"
 	"fmt"
+	"io"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -49,82 +49,24 @@ func (s *Service) HandleAssays(ctx context.Context) (Result, error) {
 	var handled atomic.Int64
 	//--> Global words count
 	wordsCount := make(map[string]int, 2048)
-	var wordsMu sync.Mutex
 
 	//--> Rate limiter (Token bucket at RPS)
 	tokenChan := rateLimiter(ctx, s.config.RatePerSecond)
 
 	//--> Workers: fetch, count, emit top 10 for all assays
-	var wg sync.WaitGroup
-	for i := 0; i < s.config.Workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := range jobs {
-				select {
-				case <-ctx.Done():
-					return
-				case <-tokenChan:
-				}
+	s.createWorkersPool(ctx, &handled, jobs, results, urls, tokenChan, wordsCount)
 
-				text, intErr := s.fetchAssay(ctx, j.url)
-				if intErr != nil {
-					select {
-					case results <- result{err: intErr}:
-					default:
-					}
-					n := handled.Add(1)
-					if n%50 == 0 {
-						s.log.Info(fmt.Sprintf("Handled %d assays", n))
-					}
-					continue
-				}
-				//--> get words from assay and append to global map
-				wordsMu.Lock()
-				utils.CountWordsIntoMap(text, s.wordsBank, s.config.MinWordLength, wordsCount)
-				wordsMu.Unlock()
-				n := handled.Add(1)
-				if n%50 == 0 {
-					s.log.Info(fmt.Sprintf("Handled %d assays", n))
-				}
-			}
-		}()
-	}
-
-	//--> Feed jobs and then close
-	go func() {
-		defer close(jobs)
-		for _, u := range urls {
-			select {
-			case <-ctx.Done():
-				return
-			case jobs <- job{url: u}:
-			}
-		}
-	}()
-
-	//--> Collector
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
+	//--> Jobs: Feed jobs and then close
+	go feedJobs(ctx, jobs, urls)
 
 	var firstError error
-	for r := range results {
-		if r.err != nil && firstError == nil {
-			firstError = r.err
-			//keep going to collect others
-			continue
-		}
-	}
+	s.collectFirstError(results, &firstError)
 
 	//--> final progress counter
-	if handled.Load()%50 != 0 {
-		s.log.Info("Progress", "handled", handled.Load(), "total", len(urls))
-	}
+	s.progressNotifier(&handled, len(urls), true)
 
 	//--> If nothing succeeded, return error
-	if firstError != nil && len(wordsCount) == 0 {
+	if firstError != nil {
 		return Result{}, firstError
 	}
 
@@ -143,12 +85,34 @@ func (s *Service) HandleAssays(ctx context.Context) (Result, error) {
 
 }
 
+func (s *Service) collectFirstError(results <-chan result, firstError *error) {
+	for r := range results {
+		if r.err != nil && firstError == nil {
+			*firstError = r.err
+			continue
+		}
+	}
+}
+
+func (s *Service) progressNotifier(counter *atomic.Int64, total int, final bool) {
+	if final {
+		if counter.Load()%50 != 0 {
+			s.log.Info("Progress", "handled", counter.Load(), "total", total)
+		}
+	}
+	if counter.Load()%50 == 0 {
+		s.log.Info("Handled assays", "count", counter.Load())
+	}
+}
+
 func rateLimiter(ctx context.Context, ratePerSecond int) chan struct{} {
 	tokenChan := make(chan struct{}, ratePerSecond)
 
 	go func() {
 		ticker := time.NewTicker(time.Second / time.Duration(ratePerSecond))
 		defer ticker.Stop()
+		defer close(tokenChan)
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -186,50 +150,55 @@ func (s *Service) fetchAssay(ctx context.Context, url string) (string, error) {
 			if resp.StatusCode == http.StatusNotFound {
 				return "", nil
 			}
-			return "", errors.New(fmt.Sprintf("bad status code: %d, assay url %s", resp.StatusCode, url))
+			return "", fmt.Errorf("bad status code: %d, assay url %s", resp.StatusCode, url)
 		}
 		//--> read response body with limit
 		body, err := utils.IOReadAllWithLimit(resp.Body, readLimit) //--> readLimit is 5MB
 		if err != nil {
 			return "", err
 		}
-		//--> parse html, extract text
-		assayHtml, err := html.Parse(bytes.NewReader(body))
-		if err != nil {
-			return "", err
-		}
-
-		var sb strings.Builder
-		//--> recursive function to walk nodes
-		var walk func(*html.Node, bool)
-
-		walk = func(n *html.Node, skip bool) {
-			if n.Type == html.ElementNode {
-				// tags to skip entirely (and their children)
-				switch n.Data {
-				case "script", "style", "noscript", "iframe", "header", "footer", "nav", "aside":
-					skip = true
-				}
-			}
-			if !skip {
-				if n.Type == html.TextNode {
-					text := strings.TrimSpace(n.Data)
-					if len(text) > 0 {
-						sb.WriteString(text)
-						sb.WriteString(" ")
-					}
-				}
-				for c := n.FirstChild; c != nil; c = c.NextSibling {
-					walk(c, skip)
-				}
-			}
-		}
-		walk(assayHtml, false)
-
-		return sb.String(), nil
+		//--> parse html and extract text
+		return parseHtml(bytes.NewReader(body))
 	}
 	s.log.Error(fmt.Sprintf("invalid url: %s", url))
 	return "", nil
+}
+
+func parseHtml(reader io.Reader) (string, error) {
+	//--> parse html, extract text
+	assayHtml, err := html.Parse(reader)
+	if err != nil {
+		return "", err
+	}
+
+	var sb strings.Builder
+	//--> recursive function to walk nodes
+	var walk func(*html.Node, bool)
+
+	walk = func(n *html.Node, skip bool) {
+		if n.Type == html.ElementNode {
+			// tags to skip entirely (and their children)
+			switch n.Data {
+			case "script", "style", "noscript", "iframe", "header", "footer", "nav", "aside":
+				skip = true
+			}
+		}
+		if !skip {
+			if n.Type == html.TextNode {
+				text := strings.TrimSpace(n.Data)
+				if len(text) > 0 {
+					sb.WriteString(text)
+					sb.WriteString(" ")
+				}
+			}
+			for c := n.FirstChild; c != nil; c = c.NextSibling {
+				walk(c, skip)
+			}
+		}
+	}
+	walk(assayHtml, false)
+
+	return sb.String(), nil
 }
 
 func topWordsCounter(words map[string]int, desiredTopN int) []WordCount {
@@ -250,4 +219,63 @@ func topWordsCounter(words map[string]int, desiredTopN int) []WordCount {
 		return topWords[:desiredTopN]
 	}
 	return topWords
+}
+
+func feedJobs(ctx context.Context, jobs chan<- job, urls []string) {
+	//--> Feed jobs and then close
+	defer close(jobs)
+	for _, u := range urls {
+		select {
+		case <-ctx.Done():
+			return
+		case jobs <- job{url: u}:
+		}
+	}
+}
+
+func (s *Service) createWorkersPool(ctx context.Context, handled *atomic.Int64, jobs <-chan job, results chan<- result, urls []string, tokenChan chan struct{}, wordsCount map[string]int) {
+	//--> Workers: fetch, count, emit top 10 for all assays
+	var wordsMu sync.Mutex
+	var wg sync.WaitGroup
+
+	for i := 0; i < s.config.Workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				select {
+				case <-ctx.Done():
+					return
+				case <-tokenChan:
+				}
+
+				//--> safeguard
+				if ctx.Err() != nil {
+					return
+				}
+
+				text, intErr := s.fetchAssay(ctx, j.url)
+				if intErr != nil {
+					select {
+					case results <- result{err: intErr}:
+					default:
+					}
+					handled.Add(1)
+					s.progressNotifier(handled, len(urls), false)
+					continue
+				}
+				//--> get words from assay and append to global map
+				wordsMu.Lock()
+				utils.CountWordsIntoMap(text, s.wordsBank, s.config.MinWordLength, wordsCount)
+				wordsMu.Unlock()
+				handled.Add(1)
+				s.progressNotifier(handled, len(urls), false)
+			}
+		}()
+	}
+	//--> Collector
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
 }
