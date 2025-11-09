@@ -93,6 +93,7 @@ func (s *Service) HandleAssays(ctx context.Context) (Result, error) {
 
 	//--> Feed jobs and then close
 	go func() {
+		defer close(jobs)
 		for _, u := range urls {
 			select {
 			case <-ctx.Done():
@@ -100,13 +101,12 @@ func (s *Service) HandleAssays(ctx context.Context) (Result, error) {
 			case jobs <- job{url: u}:
 			}
 		}
-		defer close(jobs)
 	}()
 
 	//--> Collector
 	go func() {
 		wg.Wait()
-		defer close(results)
+		close(results)
 	}()
 
 	var firstError error

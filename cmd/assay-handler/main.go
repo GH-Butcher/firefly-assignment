@@ -12,10 +12,13 @@ import (
 	"time"
 )
 
-const urlsListPath = "assays.list"
+const (
+	urlsListPath   = "assays.list"
+	contextTimeout = 10 * time.Second
+)
 
 func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), contextTimeout)
 	defer cancel()
 
 	log := logger.Init(logger.WithLogLevel(slog.LevelDebug)).Log
@@ -73,7 +76,8 @@ func main() {
 			log.Info("Shutdown complete with partial/final results")
 		case err = <-errorsChan:
 			log.Error("Error received", "error", err)
-		default:
+		case <-time.After(300 * time.Millisecond):
+			log.Info("No partial/final results received, shutting down..")
 		}
 	case err = <-errorsChan:
 		log.Error("Error received", "error", err)
@@ -84,5 +88,4 @@ func main() {
 		os.Stdout.Write([]byte("\n"))
 		log.Info("Proccessing complete..")
 	}
-
 }
