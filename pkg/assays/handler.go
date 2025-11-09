@@ -132,9 +132,11 @@ func (s *Service) HandleAssays(ctx context.Context) (Result, error) {
 	topWords := topWordsCounter(wordsCount, s.config.TopWordsCount)
 
 	assayResult := AssayResult{
-		AssaysCount:          len(urls),
+		TargetAssaysCount:    len(urls),
+		HandledAssaysCount:   handled.Load(),
 		DesiredTopWordsCount: s.config.TopWordsCount,
 		TopWords:             topWords,
+		DesiredWordLength:    s.config.MinWordLength,
 	}
 
 	return Result{AssaysResult: assayResult}, nil

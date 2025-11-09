@@ -31,8 +31,10 @@ Example output (shape may vary):
 ```json
 {
   "assays_result": {
-    "assays_count": 500,
+    "target_assays_count": 500,
+    "handled_assays_count": 500,
     "desired_top_words_count": 1,
+    "desired_word_length": 3,
     "top_words": [
       {
         "word": "someword",

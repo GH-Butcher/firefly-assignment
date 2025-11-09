@@ -14,8 +14,10 @@ type Service struct {
 }
 
 type AssayResult struct {
-	AssaysCount          int         `json:"assays_count"`
+	TargetAssaysCount    int         `json:"target_assays_count"`
+	HandledAssaysCount   int64       `json:"handled_assays_count"`
 	DesiredTopWordsCount int         `json:"desired_top_words_count"`
+	DesiredWordLength    int         `json:"desired_word_length"`
 	TopWords             []WordCount `json:"top_words"`
 }
 

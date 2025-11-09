@@ -71,8 +71,14 @@ func main() {
 		select {
 		case res := <-resultsChan:
 			jsonOutput, _ := json.MarshalIndent(res, "", "  ")
-			os.Stdout.Write(jsonOutput)
-			os.Stdout.Write([]byte("\n"))
+			_, err = os.Stdout.Write(jsonOutput)
+			if err != nil {
+				return
+			}
+			_, err = os.Stdout.Write([]byte("\n"))
+			if err != nil {
+				return
+			}
 			log.Info("Shutdown complete with partial/final results")
 		case err = <-errorsChan:
 			log.Error("Error received", "error", err)
@@ -84,8 +90,14 @@ func main() {
 		return
 	case res := <-resultsChan:
 		jsonOutput, _ := json.MarshalIndent(res, "", "  ")
-		os.Stdout.Write(jsonOutput)
-		os.Stdout.Write([]byte("\n"))
+		_, err = os.Stdout.Write(jsonOutput)
+		if err != nil {
+			return
+		}
+		_, err = os.Stdout.Write([]byte("\n"))
+		if err != nil {
+			return
+		}
 		log.Info("Processing complete..")
 	}
 }
