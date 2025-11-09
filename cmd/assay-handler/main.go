@@ -14,7 +14,7 @@ import (
 
 const (
 	urlsListPath   = "assays.list"
-	contextTimeout = 10 * time.Second
+	contextTimeout = 5 * time.Minute
 )
 
 func main() {
