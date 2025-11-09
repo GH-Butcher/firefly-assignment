@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"syscall"
 	"time"
 )
 
@@ -18,16 +19,17 @@ const (
 	wordsBankUrl         = "https://raw.githubusercontent.com/dwyl/english-words/master/words.txt"
 	contextTimeout       = 5 * time.Minute
 	minWordLength        = 3
-	maxUrlsToFetch       = 100
+	maxUrlsToFetch       = 0
 	bufferSize           = 128
 	ratePerSecond        = 30
 	workers              = 10
 	desiredTopWordsCount = 10
-	defaultTimeout       = 10 * time.Second
+	defaultTimeout       = 30 * time.Second
 )
 
 func main() {
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
+	// Set up context with graceful shutdown on SIGINT (Ctrl+C) or SIGTERM (docker/k8s stop)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	log := logger.Init(logger.WithLogLevel(slog.LevelDebug)).Log
@@ -96,8 +98,12 @@ func main() {
 }
 
 func jsonOutputHelper(res assays.Result, log *slog.Logger) {
-	jo, _ := json.MarshalIndent(res, "", "  ")
-	_, err := os.Stdout.Write(jo)
+	jo, err := json.MarshalIndent(res, "", "  ")
+	if err != nil {
+		log.Error("Error marshaling JSON", "error", err)
+		return
+	}
+	_, err = os.Stdout.Write(jo)
 	if err != nil {
 		log.Error("Error writing to stdout", "error", err)
 		return
