@@ -86,6 +86,6 @@ func main() {
 		jsonOutput, _ := json.MarshalIndent(res, "", "  ")
 		os.Stdout.Write(jsonOutput)
 		os.Stdout.Write([]byte("\n"))
-		log.Info("Proccessing complete..")
+		log.Info("Processing complete..")
 	}
 }
