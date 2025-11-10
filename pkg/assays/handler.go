@@ -49,7 +49,7 @@ func (s *Service) HandleAssays(ctx context.Context) (Result, error) {
 	var handled atomic.Int64
 	//--> Sharded word counter for high-performance concurrent access
 	// Using 32 shards optimized for 10 workers (reduces lock contention by ~8x)
-	wordCounter := NewShardedWordCounter(32)
+	wordCounter := NewShardedWordCounter(s.config.ShardsCount)
 
 	//--> Rate limiter using golang.org/x/time/rate (industry standard)
 	// Token bucket algorithm with burst capacity equal to rate for smooth distribution

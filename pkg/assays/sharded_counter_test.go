@@ -93,17 +93,15 @@ func TestShardedWordCounter_ConcurrentBatch(t *testing.T) {
 	var wg sync.WaitGroup
 
 	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go func(workerID int) {
-			defer wg.Done()
+		wg.Go(func() {
 			for j := 0; j < batchesPerWorker; j++ {
 				batch := map[string]int{
-					fmt.Sprintf("word_%d", workerID): 1,
-					"common":                         1,
+					fmt.Sprintf("word_%d", i): 1,
+					"common":                  1,
 				}
 				counter.IncrementBatch(batch)
 			}
-		}(i)
+		})
 	}
 
 	wg.Wait()

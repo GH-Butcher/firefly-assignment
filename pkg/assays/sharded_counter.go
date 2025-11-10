@@ -90,12 +90,6 @@ func (sc *ShardedWordCounter) Increment(word string, count int) {
 //
 // Use this when you have a local word count map to merge into the global counter.
 func (sc *ShardedWordCounter) IncrementBatch(words map[string]int) {
-	// Group words by shard to minimize lock/unlock cycles
-	type shardBatch struct {
-		shardIdx int
-		words    map[string]int
-	}
-
 	// Create batches for each shard
 	batches := make([]map[string]int, len(sc.shards))
 	for i := range batches {

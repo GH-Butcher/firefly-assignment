@@ -22,9 +22,10 @@ const (
 	maxUrlsToFetch       = 0
 	bufferSize           = 128
 	ratePerSecond        = 30
-	workers              = 10
+	workers              = 20
 	desiredTopWordsCount = 10
 	defaultTimeout       = 30 * time.Second
+	shardsCount          = 32 //--> Should be power of 2 to use fast modulo
 )
 
 func main() {
@@ -60,6 +61,7 @@ func main() {
 		assays.WithWorkers(workers),
 		assays.WithUrlsListPath(urlsListPath),
 		assays.WithTopWordsCount(desiredTopWordsCount),
+		assays.WithShardsCount(shardsCount),
 	)
 	//---> assays service
 	assayHandler := assays.NewService(log, srvConfig, wbank, httpClient)

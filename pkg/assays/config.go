@@ -7,6 +7,7 @@ const (
 	buffer         = 128
 	ratePerSecond  = 30
 	topWordsCount  = 10
+	shardsCount    = 10
 )
 
 type Option func(*Config)
@@ -19,6 +20,7 @@ type Config struct {
 	Buffer         int
 	RatePerSecond  int
 	TopWordsCount  int
+	ShardsCount    int
 }
 
 func NewConfig(opts ...Option) *Config {
@@ -29,6 +31,7 @@ func NewConfig(opts ...Option) *Config {
 		Buffer:         buffer,
 		RatePerSecond:  ratePerSecond,
 		TopWordsCount:  topWordsCount,
+		ShardsCount:    shardsCount,
 	}
 
 	for _, opt := range opts {
@@ -76,5 +79,11 @@ func WithRatePerSecond(ratePerSecond int) Option {
 func WithTopWordsCount(topWordsCount int) Option {
 	return func(cfg *Config) {
 		cfg.TopWordsCount = topWordsCount
+	}
+}
+
+func WithShardsCount(shardsCount int) Option {
+	return func(cfg *Config) {
+		cfg.ShardsCount = shardsCount
 	}
 }
