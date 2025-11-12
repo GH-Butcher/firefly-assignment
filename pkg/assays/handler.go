@@ -24,6 +24,7 @@ type job struct {
 }
 
 type result struct {
+	url string
 	err error
 }
 
@@ -61,16 +62,12 @@ func (s *Service) HandleAssays(ctx context.Context) (Result, error) {
 	//--> Jobs: Feed jobs and then close
 	go feedJobs(ctx, jobs, urls)
 
-	var firstError error
-	s.collectFirstError(results, &firstError)
-
 	//--> final progress counter
 	s.progressNotifier(&handled, len(urls), true)
 
-	//--> If nothing succeeded, return error
-	if firstError != nil {
-		return Result{}, firstError
-	}
+	var failedUrls []URLError
+
+	s.collectAllErrors(results, &failedUrls)
 
 	//---> Flatten sharded counter into single map
 	// This is safe to do here as all workers have completed
@@ -83,18 +80,24 @@ func (s *Service) HandleAssays(ctx context.Context) (Result, error) {
 		TargetAssaysCount:    len(urls),
 		HandledAssaysCount:   handled.Load(),
 		DesiredTopWordsCount: s.config.TopWordsCount,
+		FailedAssaysCount:    len(failedUrls),
 		TopWords:             topWords,
 		DesiredWordLength:    s.config.MinWordLength,
 	}
 
-	return Result{AssaysResult: assayResult}, nil
+	return Result{
+		AssaysResult: assayResult,
+	}, nil
 
 }
 
-func (s *Service) collectFirstError(results <-chan result, firstError *error) {
+func (s *Service) collectAllErrors(results <-chan result, errors *[]URLError) {
 	for r := range results {
-		if r.err != nil && *firstError == nil {
-			*firstError = r.err
+		if r.err != nil {
+			*errors = append(*errors, URLError{
+				Url: r.url,
+				Err: r.err.Error(),
+			})
 			continue
 		}
 	}
@@ -245,7 +248,7 @@ func (s *Service) createWorkersPool(ctx context.Context, handled *atomic.Int64, 
 				text, intErr := s.fetchAssay(ctx, j.url)
 				if intErr != nil {
 					select {
-					case results <- result{err: intErr}:
+					case results <- result{err: intErr, url: j.url}:
 					default:
 					}
 					handled.Add(1)

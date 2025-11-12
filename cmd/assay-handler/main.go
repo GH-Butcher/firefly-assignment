@@ -19,7 +19,7 @@ const (
 	wordsBankUrl         = "https://raw.githubusercontent.com/dwyl/english-words/master/words.txt"
 	contextTimeout       = 5 * time.Minute
 	minWordLength        = 3
-	maxUrlsToFetch       = 0
+	maxUrlsToFetch       = 1000
 	bufferSize           = 128
 	ratePerSecond        = 30
 	workers              = 20
@@ -85,6 +85,15 @@ func main() {
 		case res := <-resultsChan:
 			jsonOutputHelper(res, log)
 			log.Info("Shutdown complete with partial/final results")
+			if len(res.Errors) > 0 {
+				log.Warn("Completed with partial failures",
+					"succeeded", res.AssaysResult.HandledAssaysCount,
+					"failed", len(res.Errors),
+					"total", res.AssaysResult.TargetAssaysCount)
+				for _, err := range res.Errors {
+					log.Error("Error received", "error", err, "url", err.Url)
+				}
+			}
 		case err = <-errorsChan:
 			log.Error("Error received", "error", err)
 		case <-time.After(300 * time.Millisecond):
@@ -95,7 +104,15 @@ func main() {
 		return
 	case res := <-resultsChan:
 		jsonOutputHelper(res, log)
-		log.Info("Processing complete..")
+		if len(res.Errors) > 0 {
+			log.Warn("Completed with partial failures",
+				"succeeded", res.AssaysResult.HandledAssaysCount,
+				"failed", len(res.Errors),
+				"total", res.AssaysResult.TargetAssaysCount)
+			for _, err := range res.Errors {
+				log.Error("Error received", "error", err, "url", err.Url)
+			}
+		}
 	}
 }
 

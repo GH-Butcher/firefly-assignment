@@ -17,12 +17,19 @@ type AssayResult struct {
 	TargetAssaysCount    int         `json:"target_assays_count"`
 	HandledAssaysCount   int64       `json:"handled_assays_count"`
 	DesiredTopWordsCount int         `json:"desired_top_words_count"`
+	FailedAssaysCount    int         `json:"failed_assays_count"`
 	DesiredWordLength    int         `json:"desired_word_length"`
 	TopWords             []WordCount `json:"top_words"`
 }
 
 type Result struct {
 	AssaysResult AssayResult `json:"assays_result"`
+	Errors       []URLError  `json:"errors,omitempty"`
+}
+
+type URLError struct {
+	Url string `json:"url"`
+	Err string `json:"error"`
 }
 
 type WordCount struct {
