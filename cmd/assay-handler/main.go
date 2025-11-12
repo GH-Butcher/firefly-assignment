@@ -19,7 +19,7 @@ const (
 	wordsBankUrl         = "https://raw.githubusercontent.com/dwyl/english-words/master/words.txt"
 	contextTimeout       = 5 * time.Minute
 	minWordLength        = 3
-	maxUrlsToFetch       = 1000
+	maxUrlsToFetch       = 100
 	bufferSize           = 128
 	ratePerSecond        = 30
 	workers              = 20
@@ -91,7 +91,7 @@ func main() {
 					"failed", len(res.Errors),
 					"total", res.AssaysResult.TargetAssaysCount)
 				for _, err := range res.Errors {
-					log.Error("Error received", "error", err, "url", err.Url)
+					log.Error("Error received", "error", err.Err, "url", err.Url)
 				}
 			}
 		case err = <-errorsChan:
@@ -110,14 +110,14 @@ func main() {
 				"failed", len(res.Errors),
 				"total", res.AssaysResult.TargetAssaysCount)
 			for _, err := range res.Errors {
-				log.Error("Error received", "error", err, "url", err.Url)
+				log.Error("Error received", "error", err.Err, "url", err.Url)
 			}
 		}
 	}
 }
 
 func jsonOutputHelper(res assays.Result, log *slog.Logger) {
-	jo, err := json.MarshalIndent(res, "", "  ")
+	jo, err := json.MarshalIndent(res.AssaysResult, "", "  ")
 	if err != nil {
 		log.Error("Error marshaling JSON", "error", err)
 		return

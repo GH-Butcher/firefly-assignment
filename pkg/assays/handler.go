@@ -87,6 +87,7 @@ func (s *Service) HandleAssays(ctx context.Context) (Result, error) {
 
 	return Result{
 		AssaysResult: assayResult,
+		Errors:       failedUrls,
 	}, nil
 
 }
